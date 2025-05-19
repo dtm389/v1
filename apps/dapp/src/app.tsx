@@ -1,4 +1,4 @@
-import { Provider } from 'libs/blockchain/src/components/provider';
+import { Provider } from '@defi-token/blockchain';
 import Home from './pages/home';
 import { QueryClient } from '@tanstack/react-query';
 import { Route, Routes } from 'react-router-dom';

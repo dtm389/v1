@@ -3,12 +3,12 @@
   "version": "0.0.0",
   "license": "MIT",
   "scripts": {
-    "dev": "npx nx run dapp:serve",
-    "build": "npx nx run dapp:build",
-    "lint": "npx nx run dapp:lint",
-    "preview": "npx nx run dapp:preview",
-    "test": "npx nx run dapp:test",
-    "test-coverage": "npx nx run dapp:test --coverage"
+    "dev:dapp": "npx nx run dapp:serve",
+    "build:dapp": "npx nx run dapp:build",
+    "lint:dapp": "npx nx run dapp:lint",
+    "preview:dapp": "npx nx run dapp:preview",
+    "test:dapp": "npx nx run dapp:test",
+    "test-coverage:dapp": "npx nx run dapp:test --coverage"
   },
   "private": true,
   "dependencies": {

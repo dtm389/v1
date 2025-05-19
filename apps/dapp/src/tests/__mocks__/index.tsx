@@ -1,7 +1,7 @@
 /* eslint-disable @typescript-eslint/ban-ts-comment */
 import { QueryClient } from '@tanstack/react-query';
 import { createConfig, http } from '@wagmi/core';
-import { Provider } from 'libs/blockchain/src/components/provider';
+import { Provider } from '@defi-token/blockchain';
 import { fn } from 'jest-mock';
 import { mainnet, sepolia } from 'wagmi/chains';
 import { mock } from 'wagmi/connectors';
