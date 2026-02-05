@@ -1,5 +1,5 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
-import { useCallback, useEffect } from 'react';
+import { useCallback, useEffect, useMemo } from 'react';
 import { useWriteContract } from 'wagmi';
 import { parseUnits } from 'viem';
 import { useToastStore } from '@defi-token/ui';
@@ -19,11 +19,47 @@ export function useTransfer() {
   const { transferStatus, setTransferStatus, resetTransferStatus } =
     useActionStore();
 
-  const tokenBalance = useGetTokenBalance(
-    (transferStatus?.token as TokenType) || 'DAI'
+  const currentToken = useMemo(
+    () => (transferStatus?.token as TokenType) || 'DAI',
+    [transferStatus?.token]
   );
-  const tokenAllowance = useGetTokenAllowance(
-    (transferStatus?.token as TokenType) || 'DAI'
+
+  const tokenBalance = useGetTokenBalance(currentToken);
+  const tokenAllowance = useGetTokenAllowance(currentToken);
+
+  const dismissTransferToasts = useCallback(() => {
+    dismissToast('transfer-error');
+    dismissToast('transfer-success');
+    dismissToast('transfer-pending');
+  }, [dismissToast]);
+
+  const getTransactionToastConfig = useCallback(
+    (variant: 'success' | 'destructive' | 'info', errorMsg?: string) => ({
+      id: `transfer-${variant}`,
+      title: variant === 'success' 
+        ? 'Transfer Successful'
+        : variant === 'destructive'
+        ? 'Transfer Error'
+        : 'Transferring, please wait...',
+      message: `
+      Amount: ${transferStatus?.amount} ${transferStatus?.token} \n
+      To: ${transferStatus?.targetAddress} \n
+      ${errorMsg ? `Error: ${errorMsg}` : `Transaction hash: ${transferStatus?.tx}`}
+      `,
+      variant,
+      timeout: variant === 'destructive' ? 60000 : variant === 'info' ? 60000 : 15000,
+      button: (variant === 'success' || variant === 'info') ? {
+        label: 'View on Etherscan',
+        onClick: () => {
+          window.open(
+            `${ETHERSCAN_URL}/tx/${transferStatus?.tx}`,
+            '_blank',
+            'noopener,noreferrer'
+          );
+        },
+      } : undefined,
+    }),
+    [transferStatus?.amount, transferStatus?.token, transferStatus?.targetAddress, transferStatus?.tx]
   );
 
   const refetchBalances = useCallback(async () => {
@@ -32,101 +68,14 @@ export function useTransfer() {
       await tokenAllowance.refetch();
     }
 
-    addToast({
-      id: 'transfer-success',
-      title: `Transfer Successful`,
-      message: `
-      Amount: ${transferStatus?.amount} ${transferStatus?.token} \n
-      To: ${transferStatus?.targetAddress} \n
-      Transaction hash: ${transferStatus?.tx}
-      `,
-      variant: 'success',
-      timeout: 15000,
-      button: {
-        label: 'View on Etherscan',
-        onClick: () => {
-          window.open(
-            `${ETHERSCAN_URL}/tx/${transferStatus?.tx}`,
-            '_blank',
-            'noopener,noreferrer'
-          );
-        },
-      },
-    });
-
+    addToast(getTransactionToastConfig('success'));
     resetTransferStatus();
     reset();
-  }, [
-    transferStatus?.token,
-    transferStatus?.amount,
-    transferStatus?.targetAddress,
-    transferStatus?.tx,
-    tokenBalance,
-    tokenAllowance,
-    addToast,
-    resetTransferStatus,
-    reset,
-  ]);
+  }, [tokenBalance, tokenAllowance, getTransactionToastConfig, addToast, resetTransferStatus, reset]);
 
-  const showErrorAlert = useCallback(() => {
-    addToast({
-      id: 'transfer-error',
-      title: `Transfer Error`,
-      message: `
-      Amount: ${transferStatus?.amount} ${transferStatus?.token} \n
-      To: ${transferStatus?.targetAddress} \n
-      Error: ${transferStatus?.error}
-      `,
-      variant: 'destructive',
-      timeout: 60000,
-    });
-
-    resetTransferStatus();
-    reset();
-  }, [
-    addToast,
-    transferStatus?.amount,
-    transferStatus?.token,
-    transferStatus?.targetAddress,
-    transferStatus?.error,
-    resetTransferStatus,
-    reset,
-  ]);
-
-  const showPendingAlert = useCallback(() => {
-    addToast({
-      id: 'transfer-pending',
-      title: `Transferring, please wait...`,
-      message: `
-      Amount: ${transferStatus?.amount} ${transferStatus?.token} \n
-      To: ${transferStatus?.targetAddress} \n
-      Transaction hash: ${transferStatus?.tx}
-      `,
-      variant: 'info',
-      timeout: 60000,
-      button: {
-        label: 'View on Etherscan',
-        onClick: () => {
-          window.open(
-            `${ETHERSCAN_URL}/tx/${transferStatus?.tx}`,
-            '_blank',
-            'noopener,noreferrer'
-          );
-        },
-      },
-    });
-  }, [
-    addToast,
-    transferStatus?.amount,
-    transferStatus.targetAddress,
-    transferStatus?.token,
-    transferStatus?.tx,
-  ]);
-
-  const transfer = useCallback(
-    async (token: TokenType, to: `0x${string}`, amount: string) => {
-      dismissToast('transfer-error');
-      dismissToast('transfer-success');
+  const executeTransfer = useCallback(
+    async (token: TokenType, to: `0x${string}`, amount: string, isFromTransfer = false) => {
+      dismissTransferToasts();
 
       setTransferStatus({
         isPending: true,
@@ -136,26 +85,30 @@ export function useTransfer() {
       });
 
       try {
+        const args = isFromTransfer
+          ? [address as `0x${string}`, to, parseUnits(amount, handleContract(token).decimals)]
+          : [to, parseUnits(amount, handleContract(token).decimals)];
+
         const tx = await writeContractAsync({
           address: handleContract(token).address,
           abi: handleContract(token).abi,
-          functionName: 'transfer',
-          args: [to, parseUnits(amount, handleContract(token).decimals)],
+          functionName: isFromTransfer ? 'transferFrom' : 'transfer',
+          args,
         });
 
-        setTransferStatus({
-          tx,
-        });
-
+        setTransferStatus({ tx });
         await waitForTransactionReceipt(config, { hash: tx });
         return tx;
       } catch (error: any) {
         console.error(error);
         dismissToast('transfer-pending');
+        const errorMessage = isFromTransfer 
+          ? extractDetailsMessage(error) || 'An error occurred'
+          : error?.message;
         setTransferStatus({
           isPending: false,
           isError: true,
-          error: error?.message,
+          error: errorMessage,
         });
       } finally {
         dismissToast('transfer-pending');
@@ -165,63 +118,31 @@ export function useTransfer() {
         });
       }
     },
-    [dismissToast, setTransferStatus, writeContractAsync]
+    [dismissTransferToasts, dismissToast, setTransferStatus, writeContractAsync, address]
+  );
+
+  const transfer = useCallback(
+    async (token: TokenType, to: `0x${string}`, amount: string) => 
+      executeTransfer(token, to, amount, false),
+    [executeTransfer]
   );
 
   const transferFrom = useCallback(
-    async (token: TokenType, to: `0x${string}`, amount: string) => {
-      dismissToast('transfer-error');
-      dismissToast('transfer-success');
-
-      setTransferStatus({
-        isPending: true,
-        token,
-        amount,
-        targetAddress: to,
-      });
-
-      try {
-        const tx = await writeContractAsync({
-          address: handleContract(token).address,
-          abi: handleContract(token).abi,
-          functionName: 'transferFrom',
-          args: [
-            address as `0x${string}`,
-            to,
-            parseUnits(amount, handleContract(token).decimals),
-          ],
-        });
-
-        setTransferStatus({
-          tx,
-        });
-
-        await waitForTransactionReceipt(config, { hash: tx });
-        return tx;
-      } catch (error: any) {
-        console.error(error);
-        const detailsMessages = extractDetailsMessage(error);
-        dismissToast('transfer-pending');
-        setTransferStatus({
-          isPending: false,
-          isError: true,
-          error: detailsMessages || 'An error occurred',
-        });
-      } finally {
-        dismissToast('transfer-pending');
-        setTransferStatus({
-          isPending: false,
-          isSuccess: true,
-        });
-      }
-    },
-    [dismissToast, setTransferStatus, writeContractAsync, address]
+    async (token: TokenType, to: `0x${string}`, amount: string) => 
+      executeTransfer(token, to, amount, true),
+    [executeTransfer]
   );
 
   useEffect(() => {
-    if (transferStatus.isPending && transferStatus?.tx) showPendingAlert();
-    if (transferStatus.isError) showErrorAlert();
-    if (transferStatus.isSuccess && !transferStatus.isError) refetchBalances();
+    if (transferStatus.isPending && transferStatus?.tx) {
+      addToast(getTransactionToastConfig('info'));
+    } else if (transferStatus.isError) {
+      addToast(getTransactionToastConfig('destructive', transferStatus?.error));
+      resetTransferStatus();
+      reset();
+    } else if (transferStatus.isSuccess && !transferStatus.isError) {
+      refetchBalances();
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [
     transferStatus?.tx,

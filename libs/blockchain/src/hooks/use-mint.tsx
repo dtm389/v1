@@ -1,5 +1,5 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
-import { useCallback, useEffect } from 'react';
+import { useCallback, useEffect, useMemo } from 'react';
 import { useWriteContract } from 'wagmi';
 import { parseUnits } from 'viem';
 import { useToastStore } from '@defi-token/ui';
@@ -18,11 +18,45 @@ export function useMint() {
   const { useGetTokenBalance, useGetTokenAllowance } = useBalance();
   const { mintStatus, setMintStatus, resetMintStatus } = useActionStore();
 
-  const tokenBalance = useGetTokenBalance(
-    (mintStatus?.token as TokenType) || 'DAI'
+  const currentToken = useMemo(
+    () => (mintStatus?.token as TokenType) || 'DAI',
+    [mintStatus?.token]
   );
-  const tokenAllowance = useGetTokenAllowance(
-    (mintStatus?.token as TokenType) || 'DAI'
+
+  const tokenBalance = useGetTokenBalance(currentToken);
+  const tokenAllowance = useGetTokenAllowance(currentToken);
+
+  const dismissMintToasts = useCallback(() => {
+    dismissToast('mint-error');
+    dismissToast('mint-success');
+    dismissToast('minting');
+  }, [dismissToast]);
+
+  const getMintToastConfig = useCallback(
+    (variant: 'success' | 'destructive' | 'info', errorMsg?: string) => ({
+      id: variant === 'info' ? 'minting' : `mint-${variant}`,
+      title: variant === 'success' 
+        ? 'Mint Successful'
+        : variant === 'destructive'
+        ? 'Mint Error'
+        : 'Minting, please wait...',
+      message: `
+      Amount: ${mintStatus?.amount} ${mintStatus?.token} \n
+      ${errorMsg ? `Error: ${errorMsg}` : `Transaction hash: ${mintStatus?.tx}`}`,
+      variant,
+      timeout: variant === 'destructive' ? 60000 : variant === 'info' ? 60000 : 15000,
+      button: (variant === 'success' || variant === 'info') ? {
+        label: 'View on Etherscan',
+        onClick: () => {
+          window.open(
+            `${ETHERSCAN_URL}/tx/${mintStatus?.tx}`,
+            '_blank',
+            'noopener,noreferrer'
+          );
+        },
+      } : undefined,
+    }),
+    [mintStatus?.amount, mintStatus?.token, mintStatus?.tx]
   );
 
   const refetchBalances = useCallback(async () => {
@@ -31,89 +65,14 @@ export function useMint() {
       await tokenAllowance.refetch();
     }
 
-    addToast({
-      id: 'mint-success',
-      title: `Mint Successful`,
-      message: `
-      Amount: ${mintStatus?.amount} ${mintStatus?.token} \n
-      Transaction hash: ${mintStatus?.tx}
-      `,
-      variant: 'success',
-      timeout: 15000,
-      button: {
-        label: 'View on Etherscan',
-        onClick: () => {
-          window.open(
-            `${ETHERSCAN_URL}/tx/${mintStatus?.tx}`,
-            '_blank',
-            'noopener,noreferrer'
-          );
-        },
-      },
-    });
-
+    addToast(getMintToastConfig('success'));
     resetMintStatus();
     reset();
-  }, [
-    addToast,
-    tokenBalance,
-    tokenAllowance,
-    mintStatus?.amount,
-    mintStatus?.token,
-    mintStatus?.tx,
-    resetMintStatus,
-    reset,
-  ]);
-
-  const showErrorAlert = useCallback(() => {
-    addToast({
-      id: 'mint-error',
-      title: `Mint Error`,
-      message: `
-      Amount: ${mintStatus?.amount} ${mintStatus?.token} \n
-      Error: ${mintStatus?.error}
-      `,
-      variant: 'destructive',
-      timeout: 60000,
-    });
-
-    resetMintStatus();
-    reset();
-  }, [
-    addToast,
-    mintStatus?.amount,
-    mintStatus?.error,
-    mintStatus?.token,
-    resetMintStatus,
-    reset,
-  ]);
-
-  const showPendingAlert = useCallback(() => {
-    addToast({
-      id: 'minting',
-      title: `Minting, please wait...`,
-      message: `
-      Amount: ${mintStatus?.amount} ${mintStatus?.token} \n
-      Transaction hash: ${mintStatus?.tx}`,
-      variant: 'info',
-      timeout: 60000,
-      button: {
-        label: 'View on Etherscan',
-        onClick: () => {
-          window.open(
-            `${ETHERSCAN_URL}/tx/${mintStatus?.tx}`,
-            '_blank',
-            'noopener,noreferrer'
-          );
-        },
-      },
-    });
-  }, [addToast, mintStatus?.amount, mintStatus?.token, mintStatus?.tx]);
+  }, [tokenBalance, tokenAllowance, getMintToastConfig, addToast, resetMintStatus, reset]);
 
   const mint = useCallback(
     async (token: TokenType, amount: string) => {
-      dismissToast('mint-error');
-      dismissToast('mint-success');
+      dismissMintToasts();
 
       setMintStatus({
         isPending: true,
@@ -140,12 +99,12 @@ export function useMint() {
         return tx;
       } catch (error: any) {
         console.error(error);
-        const detailsMessages = extractDetailsMessage(error);
+        const errorMessage = extractDetailsMessage(error) || 'An error occurred';
         dismissToast('minting');
         setMintStatus({
           isPending: false,
           isError: true,
-          error: detailsMessages || 'An error occurred',
+          error: errorMessage,
         });
       } finally {
         dismissToast('minting');
@@ -155,13 +114,19 @@ export function useMint() {
         });
       }
     },
-    [dismissToast, setMintStatus, writeContractAsync, address]
+    [dismissMintToasts, dismissToast, setMintStatus, writeContractAsync, address]
   );
 
   useEffect(() => {
-    if (mintStatus.isPending && mintStatus?.tx) showPendingAlert();
-    if (mintStatus.isError) showErrorAlert();
-    if (mintStatus.isSuccess) refetchBalances();
+    if (mintStatus.isPending && mintStatus?.tx) {
+      addToast(getMintToastConfig('info'));
+    } else if (mintStatus.isError) {
+      addToast(getMintToastConfig('destructive', mintStatus?.error));
+      resetMintStatus();
+      reset();
+    } else if (mintStatus.isSuccess) {
+      refetchBalances();
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [
     mintStatus?.tx,
